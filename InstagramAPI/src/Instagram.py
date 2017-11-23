@@ -5,6 +5,7 @@ import time
 import urllib
 from collections import OrderedDict
 from distutils.version import LooseVersion
+from threading import Lock
 
 try:
     from io import BytesIO
@@ -34,6 +35,7 @@ class Instagram:
         :param debug: Debug on or off, False by default.
         :param IGDataPath: Default folder to store data, you can change it.
         """
+
         self.username = None  # // Instagram username
         self.password = None  # // Instagram password
         self.debug = None  # // Debug
@@ -53,7 +55,7 @@ class Instagram:
         self.proxyHost = None  # Proxy Host and Port
         self.proxyAuth = None  # Proxy User and Pass
 
-        self.debug = debug
+        self.debug = debug #debug
         self.truncatedDebug = truncatedDebug
         self.device_id = SignatureUtils.generateDeviceId(hashlib.md5((username + password).encode("utf-8")))
 
@@ -74,46 +76,6 @@ class Instagram:
         self.http = HttpInterface(self)
 
         self.setUser(username, password)
-
-
-    def getUserLive(self):
-        """
-        https://i.instagram.com/api/v1/live/
-        Get user reels.
-        :return: User feed data
-        :raises: InstagramException
-        """
-        # //feed/reels_tray/https://i.instagram.com/api/v1/
-
-        userFeed = self.http.request("feed/reels_tray/")[1]
-
-        # ;
-        # "feed/live/")[1]
-        # "feed/user/"+str(usernameId)+"/reel_media/"
-        # + str(usernameId) + "/live/?rank_token=" + self.rank_token)[1]
-
-        if userFeed['status'] != 'ok':
-            raise InstagramException(userFeed['message'] + "\n")
-
-        return userFeed
-
-        #   Evil Funct
-
-    def getUserStory(self, usernameId):
-        """
-
-        Get user story.
-        :type usernameId: str
-        :param usernameId: Username id
-        :return: User feed data
-        :raises: InstagramException
-        """
-        userFeed = self.http.request("feed/user/" + str(usernameId) + "/story/?rank_token=" + self.rank_token)[1]
-
-        if userFeed['status'] != 'ok':
-            raise InstagramException(userFeed['message'] + "\n")
-
-        return userFeed
 
     def setUser(self, username, password):
         """
@@ -186,16 +148,20 @@ class Instagram:
         if proxy == '':
             return
 
-        proxy = parse_url(proxy)
+        # proxy = parse_url(proxy)
+        host = proxy
 
-        if port and isinstance(port, int):
-            proxy['port'] = int(port)
+        proxy = {}
+        proxy['host'] = host
+
+        if port:
+            proxy['port'] = port
 
         if username and password:
             proxy['user'] = username
             proxy['pass'] = password
 
-        if proxy['host'] and proxy['port'] and isinstance(proxy['port'], int):
+        if proxy['host'] and proxy['port']:
             self.proxyHost = proxy['host'] + ':' + proxy['port']
         else:
             raise InstagramException('Proxy host error. Please check ip address and port of proxy.')
@@ -205,13 +171,14 @@ class Instagram:
 
     def login(self, force=False):
         """
-        Login to Instagram.
+        Login to Instagram. Synchronized
 
         :type force: bool
         :param force: Force login to Instagram, this will create a new session
         :return: Login data
         :rtype List:
         """
+
         if (not self.isLoggedIn) or force:
             self.syncFeatures(True)
             fetch = self.http.request(
@@ -220,7 +187,7 @@ class Instagram:
             response = ChallengeResponse(fetch[1])
 
             if not header or not response.isOk():
-                raise InstagramException("Couldn't get challenge, check your connection")
+                raise InstagramException(response.message)
                 # return response #FIXME unreachable code
 
             match = re.search(r'^Set-Cookie: csrftoken=([^;]+)', fetch[0], re.MULTILINE)
@@ -250,17 +217,6 @@ class Instagram:
             if match: self.token = match.group(1)
             self.settings.set('token', self.token)
 
-            self.syncFeatures()
-            self.autoCompleteUserList()
-            self.timelineFeed()
-            self.getRankedRecipients()
-            self.getRecentRecipients()
-            self.megaphoneLog()
-            self.getv2Inbox()
-            self.getRecentActivity()
-            self.getReelsTrayFeed()
-            self.explore()
-
             return response
 
         check = self.timelineFeed()
@@ -268,16 +224,6 @@ class Instagram:
         if check.getMessage() == 'login_required':
             self.login(True)
 
-        self.autoCompleteUserList()
-        self.getReelsTrayFeed()
-        self.getRankedRecipients()
-        # push register
-        self.getRecentRecipients()
-        # push register
-        self.megaphoneLog()
-        self.getv2Inbox()
-        self.getRecentActivity()
-        self.explore()
 
     def syncFeatures(self, prelogin=False):
         if prelogin:
@@ -477,9 +423,9 @@ class Instagram:
 
         :return: void
         """
-        self.http.direct_message(recipients, text)
+        return self.http.direct_message(recipients, text)
 
-    def directThread(self, threadId):
+    def directThread(self, threadId, cursorId=None):
         """
         Direct Thread Data
 
@@ -488,7 +434,8 @@ class Instagram:
         :rtype: object
         :return: Direct Thread Data
         """
-        directThread = self.http.request("direct_v2/threads/" + str(threadId) + "/?")[1]
+        directThread = self.http.request('direct_v2/threads/' + str(threadId) + '/?' + (('cursor=' + cursorId) if
+                                                                                       cursorId is not None else ''))[1]
 
         if directThread['status'] != 'ok':
             raise InstagramException(directThread['message'] + "\n")
@@ -516,7 +463,7 @@ class Instagram:
         )
         return self.http.request(
             "direct_v2/threads/" + str(threadId) + "/" + str(threadAction) + "/",
-            self.generateSignature(data)  # todo Unresolved reference
+            SignatureUtils.generateSignature(data)  # todo Unresolved reference
         )[1]
 
     def configureVideo(self, upload_id, video, caption='', customPreview=None):
@@ -976,13 +923,14 @@ class Instagram:
 
         return activity
 
-    def getv2Inbox(self):
+    def getv2Inbox(self, cursor_id = None):
         """
         I dont know this yet.
         :rtype: object
         :return: v2 inbox data
         """
-        inbox = V2InboxResponse(self.http.request('direct_v2/inbox/?')[1])
+        inbox = V2InboxResponse(self.http.request('direct_v2/inbox/?' + (('cursor=' + cursor_id) if cursor_id is not None
+                                                                         else ''))[1])
 
         if not inbox.isOk():
             raise InstagramException(inbox.getMessage() + "\n")
@@ -1206,17 +1154,17 @@ class Instagram:
         :return: User feed data
         :raises: InstagramException
         """
-        userFeed = self.http.request("feed/user/" + str(usernameId) + "/?rank_token=" + self.rank_token
-                                     + (("&max_id=" + str(maxid)) if maxid is not None else '') \
-                                     + (("&minTimestamp=" + str(minTimestamp)) if minTimestamp is not None else '') \
-                                     + "&ranked_content=true"
-                                     )[1]
+        userFeed = UserFeedResponse(self.http.request("feed/user/" + str(usernameId) + "/?rank_token=" + self.rank_token
+                                                      + (("&max_id=" + str(maxid)) if maxid is not None else '') \
+                                                      + (("&min_timestamp=" + str(
+            minTimestamp)) if minTimestamp is not None else '') \
+                                                      + "&ranked_content=true"
+                                                      )[1])
 
-        if userFeed['status'] != 'ok':
-            raise InstagramException(userFeed['message'] + "\n")
+        if not userFeed.isOk():
+            raise InstagramException(userFeed.getMessage() + "\n")
 
         return userFeed
-
 
     def getHashtagFeed(self, hashtagString, maxid=''):
         """
