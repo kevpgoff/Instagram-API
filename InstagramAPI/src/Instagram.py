@@ -69,7 +69,7 @@ class Instagram:
                 ''
             )
             if not os.path.isdir(self.IGDataPath):
-                os.mkdir(self.IGDataPath, 0777)
+                os.mkdir(self.IGDataPath, 0o777)
 
         self.checkSettings(username)
 
