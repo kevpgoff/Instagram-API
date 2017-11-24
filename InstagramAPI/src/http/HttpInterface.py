@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import hmac
 import json
 import locale
@@ -485,7 +484,7 @@ class HttpInterface(object):
             if 'headers' in b and isinstance(b['headers'], list):
                 for header in b['headers']:
                     body += ("\r\n" + header)
-            body += ("\r\n\r\n" + b['data'].encode('utf-8').decode('utf-8') + "\r\n")
+            body += ("\r\n\r\n" + b['data'].encode('ascii', 'ignore').decode('ascii') + "\r\n")
         body += ('--' + boundary + '--')
 
         return body
