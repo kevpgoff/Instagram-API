@@ -34,14 +34,9 @@ class HttpInterface(object):
         if (not self.parent.isLoggedIn) and not login:
             raise InstagramException("Not logged in\n")
 
-        headers = [
-            'Connection: close',
-            'Accept: */*',
-            'X-IG-Capabilities: 3QI=',
-            'Content-type: application/x-www-form-urlencoded; charset=UTF-8',
-            'Cookie2: $Version=1',
-            'Accept-Language: en-US'
-        ]
+        headers = ['Connection: close', 'Accept: */*', 'X-IG-Capabilities: 3QI=',
+            'Content-type: application/x-www-form-urlencoded; charset=UTF-8', 'Cookie2: $Version=1',
+            'Accept-Language: en-US']
 
         ch = pycurl.Curl()
 
@@ -56,6 +51,7 @@ class HttpInterface(object):
         ch.setopt(pycurl.SSL_VERIFYHOST, self.verifyHost)
         ch.setopt(pycurl.COOKIEFILE, self.parent.IGDataPath + self.parent.username + '-cookies.dat')
         ch.setopt(pycurl.COOKIEJAR, self.parent.IGDataPath + self.parent.username + '-cookies.dat')
+
         ch.setopt(pycurl.CONNECTTIMEOUT, 20)
         ch.setopt(pycurl.TIMEOUT, 20)
 
@@ -63,17 +59,36 @@ class HttpInterface(object):
             ch.setopt(pycurl.POST, True)
             ch.setopt(pycurl.POSTFIELDS, post)
 
+
         if self.parent.proxy:
+            ch.setopt(pycurl.IPRESOLVE, pycurl.IPRESOLVE_WHATEVER)
             ch.setopt(pycurl.PROXY, self.parent.proxyHost)
             if self.parent.proxyAuth:
                 ch.setopt(pycurl.PROXYUSERPWD, self.parent.proxyAuth)
 
-        ch.perform()
+        # костыль для отлова 'Tls packet with unexpected length was received'
+        safe_counter = 0;
+        while True:
+            safe_counter += 1
+            if safe_counter > 5:
+                return
+
+            try:
+                ch.perform()
+                break;
+            except Exception as e:
+                # код нужной ошибки
+                if e.args[0] == 56 or e.args[0] == 18:
+                    buffer = BytesIO()
+                    ch.setopt(pycurl.WRITEFUNCTION, buffer.write)
+                    continue
+                else:
+                    raise e
+
         resp = buffer.getvalue().decode("utf-8")
         header_len = ch.getinfo(pycurl.HEADER_SIZE)
         header = resp[0: header_len]
         body = resp[header_len:]
-
 
         if self.parent.debug:
             if post:
@@ -95,7 +110,13 @@ class HttpInterface(object):
                 print(Utils.colouredString('RESPONSE: ', 'cyan') + body + "\n")
 
         ch.close()
-        return [header, json.loads(body)]
+        response_dict = {}
+        try:
+            response_dict = json.loads(body)
+        except ValueError as e:
+            return self.request(endpoint, post, login)
+
+        return [header, response_dict]
 
     def uploadPhoto(self, photo, caption=None, upload_id=None, customPreview=None, location=None, filter_=None,
                     reel_flag=False):
@@ -111,52 +132,24 @@ class HttpInterface(object):
             upload_id = locale.format("%.*f", (0, round(float('%.2f' % time.time()) * 1000)), grouping=False)
             fileToUpload = file_get_contents(photo)
 
-        bodies = [
-            OrderedDict([
-                ('type', 'form-data'),
-                ('name', 'upload_id'),
-                ('data', upload_id)
-            ]),
-            OrderedDict([
-                ('type', 'form-data'),
-                ('name', '_uuid'),
-                ('data', self.parent.uuid)
-            ]),
-            OrderedDict([
-                ('type', 'form-data'),
-                ('name', '_csrftoken'),
-                ('data', self.parent.token)
-            ]),
+        bodies = [OrderedDict([('type', 'form-data'), ('name', 'upload_id'), ('data', upload_id)]),
+            OrderedDict([('type', 'form-data'), ('name', '_uuid'), ('data', self.parent.uuid)]),
+            OrderedDict([('type', 'form-data'), ('name', '_csrftoken'), ('data', self.parent.token)]),
 
-            OrderedDict([
-                ('type', 'form-data'),
-                ('name', 'image_compression'),
-                ('data', '{"lib_name":"jt","lib_version":"1.3.0","quality":"70"}')
-            ]),
+            OrderedDict([('type', 'form-data'), ('name', 'image_compression'),
+                ('data', '{"lib_name":"jt","lib_version":"1.3.0","quality":"70"}')]),
 
-            OrderedDict([
-                ('type', 'form-data'),
-                ('name', 'photo'),
-                ('data', fileToUpload),
-                ('filename', 'pending_media_' + locale.format("%.*f", (0, round(float('%.2f' % time.time()) * 1000)),
-                                                              grouping=False) + '.jpg'),
-                ('headers', [
-                    'Content-Transfer-Encoding: binary',
-                    'Content-type: application/octet-stream',
-                ])
-            ]),
-        ]
+            OrderedDict([('type', 'form-data'), ('name', 'photo'), ('data', fileToUpload), ('filename',
+                                                                                            'pending_media_' + locale.format(
+                                                                                                "%.*f", (0, round(float(
+                                                                                                    '%.2f' % time.time()) * 1000)),
+                                                                                                grouping=False) + '.jpg'),
+                ('headers', ['Content-Transfer-Encoding: binary', 'Content-type: application/octet-stream', ])]), ]
 
         data = self.buildBody(bodies, boundary)
-        headers = [
-            'Connection: close',
-            'Accept: */*',
-            'Content-type: multipart/form-data; boundary=' + boundary,
-            'Content-Length: ' + str(len(data)),
-            'Cookie2: $Version=1',
-            'Accept-Language: en-US',
-            'Accept-Encoding: gzip',
-        ]
+        headers = ['Connection: close', 'Accept: */*', 'Content-type: multipart/form-data; boundary=' + boundary,
+                                                       'Content-Length: ' + str(len(data)), 'Cookie2: $Version=1',
+            'Accept-Language: en-US', 'Accept-Encoding: gzip', ]
 
         buffer = BytesIO()
         ch = pycurl.Curl()
@@ -175,10 +168,10 @@ class HttpInterface(object):
         ch.setopt(pycurl.POST, True)
         ch.setopt(pycurl.POSTFIELDS, data)
 
-        if self.parent.proxy:
-            ch.setopt(pycurl.PROXY, self.parent.proxyHost)
-            if self.parent.proxyAuth:
-                ch.setopt(pycurl.PROXYUSERPWD, self.parent.proxyAuth)
+        # if self.parent.proxy:
+        #    ch.setopt(pycurl.PROXY, self.parent.proxyHost)
+        #    if self.parent.proxyAuth:
+        #        ch.setopt(pycurl.PROXYUSERPWD, self.parent.proxyAuth)
 
         ch.perform()
         resp = buffer.getvalue()
@@ -214,37 +207,14 @@ class HttpInterface(object):
         endpoint = Constants.API_URL + 'upload/video/'
         boundary = self.parent.uuid
         upload_id = str(int(round(float('%.2f' % time.time()) * 1000)))
-        bodies = [
-            OrderedDict([
-                ('type', 'form-data'),
-                ('name', 'upload_id'),
-                ('data', upload_id)
-            ]),
-            OrderedDict([
-                ('type', 'form-data'),
-                ('name', '_csrftoken'),
-                ('data', self.parent.token)
-            ]),
-            OrderedDict([
-                ('type', 'form-data'),
-                ('name', 'media_type'),
-                ('data', 2)
-            ]),
-            OrderedDict([
-                ('type', 'form-data'),
-                ('name', '_uuid'),
-                ('data', self.parent.uuid)
-            ]),
-        ]
+        bodies = [OrderedDict([('type', 'form-data'), ('name', 'upload_id'), ('data', upload_id)]),
+            OrderedDict([('type', 'form-data'), ('name', '_csrftoken'), ('data', self.parent.token)]),
+            OrderedDict([('type', 'form-data'), ('name', 'media_type'), ('data', 2)]),
+            OrderedDict([('type', 'form-data'), ('name', '_uuid'), ('data', self.parent.uuid)]), ]
 
         data = self.buildBody(bodies, boundary)
-        headers = [
-            'Connection: close',
-            'Accept: */*',
-            'Host: i.instagram.com',
-            'Content-type: multipart/form-data; boundary=' + boundary,
-            'Accept-Language: en-en',
-        ]
+        headers = ['Connection: close', 'Accept: */*', 'Host: i.instagram.com',
+            'Content-type: multipart/form-data; boundary=' + boundary, 'Accept-Language: en-en', ]
 
         buffer = BytesIO()
         ch = pycurl.Curl()
@@ -285,20 +255,12 @@ class HttpInterface(object):
             start = (a * request_size)
             end = (a + 1) * request_size + (lastRequestExtra if a == 3 else 0)
 
-            headers = [
-                'Connection: keep-alive',
-                'Accept: */*',
-                'Host: upload.instagram.com',
-                'Cookie2: $Version=1',
-                'Accept-Encoding: gzip, deflate',
-                'Content-Type: application/octet-stream',
-                'Session-ID: ' + str(upload_id),
-                'Accept-Language: en-en',
-                'Content-Disposition: attachment; filename="video.mov"',
-                'Content-Length: ' + str(end - start),
+            headers = ['Connection: keep-alive', 'Accept: */*', 'Host: upload.instagram.com', 'Cookie2: $Version=1',
+                'Accept-Encoding: gzip, deflate', 'Content-Type: application/octet-stream',
+                'Session-ID: ' + str(upload_id), 'Accept-Language: en-en',
+                'Content-Disposition: attachment; filename="video.mov"', 'Content-Length: ' + str(end - start),
                 'Content-Range: ' + 'bytes ' + str(start) + '-' + str(end - 1) + '/' + str(len(videoData)),
-                'job: ' + job,
-            ]
+                'job: ' + job, ]
 
             buffer = BytesIO()
             ch = pycurl.Curl()
@@ -349,46 +311,22 @@ class HttpInterface(object):
             print("Photo not valid")
             return
 
-        uData = json.dumps(
-            OrderedDict([
-                ('_csrftoken', self.parent.token),
-                ('_uuid', self.parent.uuid),
-                ('_uid', self.parent.username_id)
-            ])
-        )
+        uData = json.dumps(OrderedDict(
+            [('_csrftoken', self.parent.token), ('_uuid', self.parent.uuid), ('_uid', self.parent.username_id)]))
         endpoint = Constants.API_URL + 'accounts/change_profile_picture/'
         boundary = self.parent.uuid
         bodies = [
-            OrderedDict([
-                ('type', 'form-data'),
-                ('name', 'ig_sig_key_version'),
-                ('data', Constants.SIG_KEY_VERSION)
-            ]),
-            OrderedDict([
-                ('type', 'form-data'),
-                ('name', 'signed_body'),
-                ('data', hmac.new(Constants.IG_SIG_KEY, uData, hashlib.sha256).hexdigest() + uData)]),
-            OrderedDict([
-                ('type', 'form-data'),
-                ('name', 'profile_pic'),
-                ('data', file_get_contents(photo)),
-                ('filename', 'profile_pic'),
-                ('headers', [
-                    'Content-type: application/octet-stream',
-                    'Content-Transfer-Encoding: binary',
-                ])
-            ]),
-        ]
+            OrderedDict([('type', 'form-data'), ('name', 'ig_sig_key_version'), ('data', Constants.SIG_KEY_VERSION)]),
+            OrderedDict([('type', 'form-data'), ('name', 'signed_body'),
+                ('data', hmac.new(Constants.IG_SIG_KEY, uData, hashlib.sha256).hexdigest() + uData)]), OrderedDict(
+                [('type', 'form-data'), ('name', 'profile_pic'), ('data', file_get_contents(photo)),
+                    ('filename', 'profile_pic'),
+                    ('headers', ['Content-type: application/octet-stream', 'Content-Transfer-Encoding: binary', ])]), ]
 
         data = self.buildBody(bodies, boundary)
-        headers = [
-            'Proxy-Connection: keep-alive',
-            'Connection: keep-alive',
-            'Accept: */*',
-            'Content-type: multipart/form-data; boundary=' + boundary,
-            'Accept-Language: en-en',
-            'Accept-Encoding: gzip, deflate',
-        ]
+        headers = ['Proxy-Connection: keep-alive', 'Connection: keep-alive', 'Accept: */*',
+            'Content-type: multipart/form-data; boundary=' + boundary, 'Accept-Language: en-en',
+            'Accept-Encoding: gzip, deflate', ]
 
         buffer = BytesIO()
         ch = pycurl.Curl()
@@ -432,46 +370,20 @@ class HttpInterface(object):
 
         endpoint = Constants.API_URL + 'direct_v2/threads/broadcast/media_share/?media_type=photo'
         boundary = self.parent.uuid
-        bodies = [
-            OrderedDict([
-                ('type', 'form-data'),
-                ('name', 'media_id'),
-                ('data', media_id)
-            ]),
-            OrderedDict([
-                ('type', 'form-data'),
-                ('name', 'recipient_users'),
-                ('data', "[[" + recipient_users + "]]")
-            ]),
+        bodies = [OrderedDict([('type', 'form-data'), ('name', 'media_id'), ('data', media_id)]),
+            OrderedDict([('type', 'form-data'), ('name', 'recipient_users'), ('data', "[[" + recipient_users + "]]")]),
 
-            OrderedDict([
-                ('type', 'form-data'),
-                ('name', 'client_context'),
-                ('data', self.parent.uuid)
-            ]),
+            OrderedDict([('type', 'form-data'), ('name', 'client_context'), ('data', self.parent.uuid)]),
 
-            OrderedDict([
-                ('type', 'form-data'),
-                ('name', 'thread_ids'),
-                ('data', '["0"]')
-            ]),
+            OrderedDict([('type', 'form-data'), ('name', 'thread_ids'), ('data', '["0"]')]),
 
-            OrderedDict([
-                ('type', 'form-data'),
-                ('name', 'text'),
-                ('data', '' if text is None else text)
-            ]),
+            OrderedDict([('type', 'form-data'), ('name', 'text'), ('data', '' if text is None else text)]),
 
         ]
 
         data = self.buildBody(bodies, boundary)
-        headers = [
-            'Proxy-Connection: keep-alive',
-            'Connection: keep-alive',
-            'Accept: */*',
-            'Content-type: multipart/form-data boundary=' + boundary,
-            'Accept-Language: en-en',
-        ]
+        headers = ['Proxy-Connection: keep-alive', 'Connection: keep-alive', 'Accept: */*',
+            'Content-type: multipart/form-data boundary=' + boundary, 'Accept-Language: en-en', ]
 
         buffer = BytesIO()
         ch = pycurl.Curl()
@@ -488,8 +400,6 @@ class HttpInterface(object):
         ch.setopt(pycurl.COOKIEJAR, self.parent.IGDataPath + self.parent.username + "-cookies.dat")
         ch.setopt(pycurl.POST, True)
         ch.setopt(pycurl.POSTFIELDS, data)
-        ch.setopt(pycurl.CONNECTTIMEOUT, 20)
-        ch.setopt(pycurl.TIMEOUT, 20)
 
         if self.parent.proxy:
             ch.setopt(pycurl.PROXY, self.parent.proxyHost)
@@ -516,40 +426,19 @@ class HttpInterface(object):
         endpoint = Constants.API_URL + 'direct_v2/threads/broadcast/text/'
         boundary = self.parent.uuid
         bodies = [
-            OrderedDict([
-                ('type', 'form-data'),
-                ('name', 'recipient_users'),
-                ('data', "[[" + recipient_users + "]]")
-            ]),
+            OrderedDict([('type', 'form-data'), ('name', 'recipient_users'), ('data', "[[" + recipient_users + "]]")]),
 
-            OrderedDict([
-                ('type', 'form-data'),
-                ('name', 'client_context'),
-                ('data', self.parent.uuid)
-            ]),
+            OrderedDict([('type', 'form-data'), ('name', 'client_context'), ('data', self.parent.uuid)]),
 
-            OrderedDict([
-                ('type', 'form-data'),
-                ('name', 'thread_ids'),
-                ('data', '["0"]')
-            ]),
+            OrderedDict([('type', 'form-data'), ('name', 'thread_ids'), ('data', '["0"]')]),
 
-            OrderedDict([
-                ('type', 'form-data'),
-                ('name', 'text'),
-                ('data', '' if text is None else text)
-            ]),
+            OrderedDict([('type', 'form-data'), ('name', 'text'), ('data', '' if text is None else text)]),
 
         ]
 
         data = self.buildBody(bodies, boundary)
-        headers = [
-            'Proxy-Connection: keep-alive',
-            'Connection: keep-alive',
-            'Accept: */*',
-            'Content-type: multipart/form-data; boundary=' + boundary,
-            'Accept-Language: en-en',
-        ]
+        headers = ['Proxy-Connection: keep-alive', 'Connection: keep-alive', 'Accept: */*',
+            'Content-type: multipart/form-data; boundary=' + boundary, 'Accept-Language: en-en', ]
 
         buffer = BytesIO()
         ch = pycurl.Curl()
@@ -567,6 +456,9 @@ class HttpInterface(object):
         ch.setopt(pycurl.POST, True)
         ch.setopt(pycurl.POSTFIELDS, data)
 
+        ch.setopt(pycurl.CONNECTTIMEOUT, 20)
+        ch.setopt(pycurl.TIMEOUT, 20)
+
         if self.parent.proxy:
             ch.setopt(pycurl.PROXY, self.parent.proxyHost)
             if self.parent.proxyAuth:
@@ -578,6 +470,8 @@ class HttpInterface(object):
         header = resp[0:header_len]
         upload = json.loads(resp[header_len:])
         ch.close()
+
+        return upload
 
     def buildBody(self, bodies, boundary):
         body = ''
